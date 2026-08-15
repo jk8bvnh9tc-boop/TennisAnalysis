@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>Tennis Analysis</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f3;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.app{max-width:720px;margin:auto;min-height:100vh;padding-bottom:88px}.top{height:64px;padding:10px 16px;display:flex;align-items:center;justify-content:space-between}.top h1{font-size:20px;margin:0}.gear{border:0;background:transparent;box-shadow:none;font-size:22px;min-width:44px}
+.content{padding:0 16px}.card{background:#fff;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 1px 4px #0001}
+.section{margin:15px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:800;color:#6b7280}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.input{width:100%;padding:13px;border:1px solid #d1d5db;border-radius:12px;background:#fff}
+button{font:inherit;border:0;border-radius:14px;padding:14px;min-height:52px;background:#fff;box-shadow:0 1px 3px #0002;font-weight:650;color:#111827}
+button.primary{background:#111827;color:#fff;width:100%}button.secondary{background:#e5e7eb;width:100%}button.selected{background:#e5e7eb;outline:3px solid #111827}
+.muted{color:#6b7280;font-size:13px;line-height:1.45}.score{text-align:center;font-size:32px;font-weight:800;margin:4px 0 12px}
+.nav{position:fixed;z-index:10;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #ddd;display:grid;grid-template-columns:repeat(4,1fr);padding:6px 6px max(6px,env(safe-area-inset-bottom))}
+.nav button{box-shadow:none;background:transparent;min-height:48px;font-size:12px;padding:7px 2px}.nav button.active{background:#eee}
+.court{position:relative;width:100%;aspect-ratio:1;border:3px solid #111;background:#eef2f3;border-radius:8px;overflow:hidden;touch-action:none}
+.zone{position:absolute;width:33.3333%;height:33.3333%;border-right:1px solid #777;border-bottom:1px solid #777}.z1{left:0;top:0}.z2{left:33.3333%;top:0}.z3{left:66.6667%;top:0;border-right:0}.z4{left:0;top:33.3333%}.z5{left:33.3333%;top:33.3333%}.z6{left:66.6667%;top:33.3333%;border-right:0}.z7{left:0;top:66.6667%;border-bottom:0}.z8{left:33.3333%;top:66.6667%;border-bottom:0}.z9{left:66.6667%;top:66.6667%;border-right:0;border-bottom:0}
+.net{position:absolute;left:0;right:0;top:50%;border-top:4px solid #111;z-index:2}.marker{position:absolute;width:28px;height:28px;border-radius:50%;background:#111827;border:4px solid #fff;transform:translate(-50%,-50%);z-index:3}
+.modal{position:fixed;z-index:30;inset:0;background:#0007;display:flex;align-items:flex-end}.modalbox{width:100%;max-width:720px;margin:auto 0 0;background:#fff;border-radius:22px 22px 0 0;padding:22px 16px 30px}.modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.toast{position:fixed;z-index:50;top:15px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 15px;border-radius:12px}.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid #eee}
+.badge{font-size:12px;background:#eee;border-radius:8px;padding:4px 7px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+
+const STORAGE_KEY="tennis-analysis-state-v5";
+const DEFAULT_STATE={players:[],activePlayerId:null,matches:[],settings:{startScore:"0:0",ad:true,thirdSet:"match-tiebreak"}};
+const app=document.getElementById("app");
+let state=loadState();
+let selectedHand=null;
+let selectedOpponentHand=null;
+let moduleSelection={court:false,rally:false,serve:false,opponent:false};
+
+function freshState(){return JSON.parse(JSON.stringify(DEFAULT_STATE));}
+function loadState(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw)return freshState();
+    const x=JSON.parse(raw);
+    return {
+      players:Array.isArray(x.players)?x.players:[],
+      activePlayerId:x.activePlayerId||null,
+      matches:Array.isArray(x.matches)?x.matches:[],
+      settings:{...DEFAULT_STATE.settings,...(x.settings||{})}
+    };
+  }catch(e){return freshState();}
+}
+function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}
+function id(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2);}
+function activePlayer(){return state.players.find(p=>p.id===state.activePlayerId)||null;}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+function toast(t){const x=document.createElement("div");x.className="toast";x.textContent=t;document.body.appendChild(x);setTimeout(()=>x.remove(),1500);}
+function shell(title,body,active){
+  app.innerHTML='<div class="app"><header class="top"><h1>'+esc(title)+'</h1><button class="gear" aria-label="Einstellungen" onclick="showSettings()">⚙</button></header><main class="content">'+body+'</main><nav class="nav">'+
+    '<button class="'+(active==="home"?"active":"")+'" onclick="showHome()">Matches</button>'+
+    '<button class="'+(active==="analysis"?"active":"")+'" onclick="showAnalysis()">Analyse</button>'+
+    '<button class="'+(active==="development"?"active":"")+'" onclick="showDevelopment()">Entwicklung</button>'+
+    '<button class="'+(active==="opponents"?"active":"")+'" onclick="showOpponents()">Gegner</button></nav></div>';
+}
+
+function showHome(){
+  const p=activePlayer();
+  const last=state.matches[state.matches.length-1];
+  shell("Tennis Analysis",'<div class="card"><div class="section">Aktive Spielerin</div>'+
+    (p?'<div class="input"><b>'+esc(p.name)+'</b> · '+esc(p.hand)+' · LK '+esc(p.lk||"—")+'</div><button class="primary" style="margin-top:14px;font-size:20px" onclick="newMatch()">＋ MATCH</button>':
+    '<p class="muted">Noch keine Spielerin angelegt.</p><button class="primary" onclick="showSettings()">Spielerin anlegen</button>')+
+    '</div>'+(last?'<div class="card"><div class="section">Letztes Match</div><b>'+esc(last.player)+' – '+esc(last.opponent)+'</b><div class="score">'+esc(last.games)+'</div></div>':""),"home");
+}
+
+function showSettings(){
+  const p=activePlayer();selectedHand=p?p.hand:null;
+  shell("Einstellungen",'<div class="card"><div class="section">Aktive Spielerin</div>'+
+    '<label class="muted">Name</label><input id="player-name" class="input" value="'+esc(p?p.name:"")+'" placeholder="Name der Spielerin">'+
+    '<div class="section">Spielhand</div><div class="grid">'+
+    '<button id="hand-right" class="'+(selectedHand==="Rechts"?"selected":"")+'" onclick="pickHand(\'Rechts\')">Rechtshändig</button>'+
+    '<button id="hand-left" class="'+(selectedHand==="Links"?"selected":"")+'" onclick="pickHand(\'Links\')">Linkshändig</button></div>'+
+    '<div class="section">LK</div><input id="player-lk" class="input" inputmode="decimal" value="'+esc(p?p.lk:"")+'" placeholder="z. B. 20.8">'+
+    '<button class="primary" style="margin-top:14px" onclick="savePlayer()">SPIELERIN SPEICHERN</button></div>'+
+    '<div class="card"><div class="section">Matchregeln</div><label class="muted">Startstand</label>'+
+    '<select id="start-score" class="input"><option value="0:0">0:0</option><option value="2:2">2:2</option></select>'+
+    '<div class="section">Punktwertung</div><select id="ad-setting" class="input"><option value="1">Mit Ad</option><option value="0">Ohne Ad (No-Ad)</option></select>'+
+    '<div class="section">Dritter Satz</div><select id="third-set" class="input"><option value="match-tiebreak">Match-Tie-Break bis 10</option><option value="normal">Ganzer Satz</option></select>'+
+    '<button class="primary" style="margin-top:14px" onclick="saveRules()">REGELN SPEICHERN</button></div>',"");
+  document.getElementById("start-score").value=state.settings.startScore;
+  document.getElementById("ad-setting").value=state.settings.ad?"1":"0";
+  document.getElementById("third-set").value=state.settings.thirdSet;
+}
+function pickHand(h){selectedHand=h;document.getElementById("hand-right").classList.toggle("selected",h==="Rechts");document.getElementById("hand-left").classList.toggle("selected",h==="Links");}
+function savePlayer(){
+  const name=document.getElementById("player-name").value.trim();
+  const lk=document.getElementById("player-lk").value.trim().replace(",",".");
+  if(!name){toast("Bitte Namen eingeben.");return}
+  if(!selectedHand){toast("Bitte Spielhand auswählen.");return}
+  let p=activePlayer();
+  if(!p){p={id:id(),name:name,hand:selectedHand,lk:lk};state.players.push(p);state.activePlayerId=p.id}
+  else{p.name=name;p.hand=selectedHand;p.lk=lk}
+  save();showHome();
+}
+function saveRules(){
+  state.settings.startScore=document.getElementById("start-score").value;
+  state.settings.ad=document.getElementById("ad-setting").value==="1";
+  state.settings.thirdSet=document.getElementById("third-set").value;
+  save();toast("Matchregeln gespeichert");
+}
+
+function newMatch(){
+  if(!activePlayer()){showSettings();return}
+  moduleSelection={court:false,rally:false,serve:false,opponent:false};selectedOpponentHand=null;
+  shell("Neues Match",'<div class="card"><div class="section">Spielerin</div>'+
+    '<div class="input">'+esc(activePlayer().name)+' · '+esc(activePlayer().hand)+' · LK '+esc(activePlayer().lk||"—")+'</div>'+
+    '<div class="section">Gegnerin</div><input id="opp-name" class="input" placeholder="Name optional">'+
+    '<div class="section">Spielhand Gegnerin</div><div class="grid"><button id="opp-right" onclick="pickOppHand(\'Rechts\')">Rechtshändig</button><button id="opp-left" onclick="pickOppHand(\'Links\')">Linkshändig</button></div>'+
+    '<div class="section">LK Gegnerin</div><input id="opp-lk" class="input" inputmode="decimal" placeholder="optional">'+
+    '<div class="section">Matchtyp</div><select id="match-type" class="input"><option value="">Nicht angegeben</option><option value="Turnier">Turnier</option><option value="Punktspiel">Punktspiel</option><option value="Trainingsspiel">Trainingsspiel</option></select>'+
+    '<div class="section">Zusatzmodule</div><div class="grid">'+
+    '<button id="mod-court" onclick="toggleModule(\'court\')">Court</button><button id="mod-rally" onclick="toggleModule(\'rally\')">Ballwechsel</button><button id="mod-serve" onclick="toggleModule(\'serve\')">Aufschlag</button><button id="mod-opponent" onclick="toggleModule(\'opponent\')">Gegner</button></div>'+
+    '<button class="primary" style="margin-top:14px" onclick="startMatch()">MATCH STARTEN</button></div>',"");
+}
+function pickOppHand(h){selectedOpponentHand=h;document.getElementById("opp-right").classList.toggle("selected",h==="Rechts");document.getElementById("opp-left").classList.toggle("selected",h==="Links");}
+function toggleModule(k){moduleSelection[k]=!moduleSelection[k];document.getElementById("mod-"+k).classList.toggle("selected",moduleSelection[k]);}
+function startMatch(){
+  const p=activePlayer();
+  state.current={id:id(),player:p.name,playerLK:p.lk,playerHand:p.hand,opponent:document.getElementById("opp-name").value.trim()||"Gegnerin",
+    opponentLK:document.getElementById("opp-lk").value.trim().replace(",","."),opponentHand:selectedOpponentHand,type:document.getElementById("match-type").value,
+    mods:{...moduleSelection},games:state.settings.startScore,gamePoints:[0,0],points:[],pending:null,currentCourt:null,currentRally:null};
+  save();renderPoint();
+}
+
+function pointDisplay(){
+  const a=state.current.gamePoints[0],b=state.current.gamePoints[1],m=["0","15","30","40"];
+  if(a>=3&&b>=3){
+    if(a===b)return"40:40";
+    if(!state.settings.ad)return"40:40";
+    return a>b?"AD:40":"40:AD";
+  }
+  return m[Math.min(a,3)]+":"+m[Math.min(b,3)];
+}
+function renderPoint(){
+  const c=state.current,p=c.pending||{},name=esc(c.player);
+  shell(name+" – "+esc(c.opponent),'<div class="score">'+pointDisplay()+'</div><div class="card">'+
+    '<div class="section">Wer hat den Punkt gemacht?</div><div class="grid">'+
+    '<button class="'+(p.winner==="player"?"selected":"")+'" onclick="setWinner(\'player\')">'+name+'</button>'+
+    '<button class="'+(p.winner==="opponent"?"selected":"")+'" onclick="setWinner(\'opponent\')">'+esc(c.opponent)+'</button></div>'+
+    (p.winner?'<div class="section">'+(p.winner==="player"?"Wie hat "+name+" den Punkt gewonnen?":"Wie hat die Gegnerin den Punkt gewonnen?")+'</div><div class="grid">'+
+      '<button class="'+(p.kind==="winner"?"selected":"")+'" onclick="setKind(\'winner\')">'+(p.winner==="player"?name+"-Winner":"Gegner-Winner")+'</button>'+
+      '<button class="'+(p.kind==="error"?"selected":"")+'" onclick="setKind(\'error\')">'+(p.winner==="player"?"Gegnerfehler":name+"-Fehler")+'</button></div>':"")+
+    (p.kind?'<div class="section">'+(p.winner==="player"&&p.kind==="error"?"Nach welchem Schlag von "+name+"?":p.winner==="opponent"&&p.kind==="error"?"Welcher Schlag von "+name+" war der Fehler?":"Welcher Schlag von "+name+"?")+'</div><div class="grid">'+
+      ["Vorhand","Rückhand","Volley","Aufschlag","Return"].map(s=>'<button class="'+(p.shot===s?"selected":"")+'" onclick="setShot(\''+s+'\')">'+s+'</button>').join("")+'</div>':"")+
+    (p.shot==="Aufschlag"&&c.mods.serve?'<div class="section">Aufschlag</div><div class="grid"><button class="'+(p.serve==="first"?"selected":"")+'" onclick="setServe(\'first\')">Erster Aufschlag</button><button class="'+(p.serve==="second"?"selected":"")+'" onclick="setServe(\'second\')">Zweiter Aufschlag</button></div>':"")+
+    '</div><button class="primary" onclick="continuePoint()">WEITER</button><button class="secondary" style="margin-top:8px" onclick="confirmBack()">↩ ZURÜCK</button>',"home");
+}
+function setWinner(v){state.current.pending={winner:v};renderPoint()}
+function setKind(v){state.current.pending={...state.current.pending,kind:v};renderPoint()}
+function setShot(v){state.current.pending={...state.current.pending,shot:v};renderPoint()}
+function setServe(v){state.current.pending={...state.current.pending,serve:v};renderPoint()}
+
+function continuePoint(){
+  const p=state.current.pending,c=state.current;
+  if(!p||!p.winner||!p.kind||!p.shot){toast("Bitte alle erforderlichen Angaben auswählen.");return}
+  if(p.shot==="Aufschlag"&&c.mods.serve&&!p.serve){toast("Bitte Erster oder Zweiter Aufschlag wählen.");return}
+  if(p.winner==="opponent"&&p.kind==="error"){finishPoint();return}
+  if(c.mods.court){renderCourt();return}
+  if(c.mods.rally){renderRally();return}
+  finishPoint();
+}
+
+function renderCourt(){
+  const c=state.current,p=c.pending;
+  shell("Court",'<div class="card"><div class="section">Ballplatzierung von '+esc(c.player)+"s "+esc(p.shot)+'</div>'+
+    '<div class="court" id="court">'+Array.from({length:9},(_,i)=>'<div class="zone z'+(i+1)+'"></div>').join("")+'<div class="net"></div></div>'+
+    '<p class="muted">Klicke die tatsächliche Ballplatzierung an. „Nicht gesehen“ wird als leeres Feld gespeichert.</p>'+
+    '<button id="court-ns" class="'+(c.currentCourt==="Nicht gesehen"?"selected":"")+'" style="width:100%" onclick="courtNotSeen()">NICHT GESEHEN</button></div>'+
+    '<button class="primary" onclick="confirmCourt()">WEITER</button><button style="width:100%;margin-top:8px" onclick="renderPoint()">↩ ZURÜCK</button>',"");
+  const court=document.getElementById("court");
+  court.addEventListener("pointerdown",function(e){
+    const r=court.getBoundingClientRect();c.currentCourt={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+    document.getElementById("court-ns").classList.remove("selected");
+    const old=court.querySelector(".marker");if(old)old.remove();
+    const m=document.createElement("div");m.className="marker";m.style.left=(c.currentCourt.x*100)+"%";m.style.top=(c.currentCourt.y*100)+"%";court.appendChild(m);
+  });
+}
+function courtNotSeen(){state.current.currentCourt="Nicht gesehen";document.getElementById("court-ns").classList.add("selected");const m=document.querySelector(".marker");if(m)m.remove()}
+function confirmCourt(){if(!state.current.currentCourt){toast("Ballplatzierung auswählen oder 'Nicht gesehen'.");return}if(state.current.mods.rally)renderRally();else finishPoint()}
+
+function renderRally(){
+  const v=state.current.currentRally;
+  shell("Ballwechsel",'<div class="card"><div class="section">Dauer des Ballwechsels (eigene Schlagzahl)</div><div class="grid">'+
+    ["1","2–3","4–6","7+"].map(x=>'<button class="'+(v===x?"selected":"")+'" onclick="setRally(\''+x+'\')">'+x+" Schläge</button>").join("")+
+    '</div><button class="'+(v==="Nicht gesehen"?"selected":"")+'" style="width:100%;margin-top:10px" onclick="setRally(\'Nicht gesehen\')">NICHT GESEHEN</button></div>'+
+    '<button class="primary" onclick="confirmRally()">BESTÄTIGEN</button><button style="width:100%;margin-top:8px" onclick="renderPoint()">↩ ZURÜCK</button>',"");
+}
+function setRally(v){state.current.currentRally=v;renderRally()}
+function confirmRally(){if(!state.current.currentRally){toast("Bitte Ballwechseldauer wählen.");return}finishPoint()}
+
+function finishPoint(){
+  const c=state.current,p=c.pending;
+  c.points.push({...p,court:c.currentCourt??null,rally:c.currentRally??null});
+  advancePoint(p.winner);c.pending=null;c.currentCourt=null;c.currentRally=null;save();renderPoint();
+}
+function advancePoint(winner){
+  const i=winner==="player"?0:1,o=1-i,g=state.current.gamePoints;
+  if(g[0]>=3&&g[1]>=3){
+    if(state.settings.ad){
+      if(g[0]===g[1]){g[i]=4;g[o]=3;return}
+      if(g[i]===4){winGame(i);return}
+      g[i]=3;g[o]=3;return
+    }else{winGame(i);return}
+  }
+  g[i]++;
+  if(g[i]>=4&&g[i]>g[o])winGame(i);
+}
+function winGame(i){const g=state.current.games.split(":").map(Number);g[i]++;state.current.games=g.join(":");state.current.gamePoints=[0,0]}
+
+function confirmBack(){
+  if(!state.current?.points?.length){toast("Noch kein Punkt erfasst.");return}
+  const modal=document.createElement("div");modal.className="modal";modal.innerHTML='<div class="modalbox"><h3>Wirklich zurück?</h3><p class="muted">Der zuletzt bestätigte Punkt wird gelöscht und der Spielstand neu berechnet.</p><div class="modal-actions"><button onclick="this.closest(\'.modal\').remove()">Abbrechen</button><button class="primary" onclick="undoLast()">Zurück</button></div></div>';document.body.appendChild(modal);
+}
+function undoLast(){
+  document.querySelector(".modal")?.remove();state.current.points.pop();state.current.games=state.settings.startScore;state.current.gamePoints=[0,0];
+  const copy=[...state.current.points];for(const p of copy)advancePoint(p.winner);save();renderPoint();
+}
+
+function showAnalysis(){
+  shell("Analyse",'<div class="card"><h2>Matches</h2>'+
+    (state.matches.length?state.matches.map(m=>'<div class="row"><span>'+esc(m.player)+" – "+esc(m.opponent)+'<br><span class="badge">'+esc(m.games)+'</span></span><button onclick="matchDetail(\''+esc(m.id)+'\')">Öffnen</button></div>').join(""):'<p class="muted">Noch keine abgeschlossenen Matches.</p>'),"analysis");
+}
+function matchDetail(id){
+  const m=state.matches.find(x=>x.id===id);if(!m)return;
+  shell("Matchdetail",'<div class="card"><h2>'+esc(m.player)+" – "+esc(m.opponent)+'</h2><div class="score">'+esc(m.games)+'</div><div class="section">Analyse auswählen</div>'+
+    '<select class="input"><option>Matchübersicht</option><option>Heatmap</option><option>Ballplatzierung</option><option>Fehleranalyse</option><option>Ballwechsel</option><option>Vorhand / Rückhand</option><option>Aufschlag 🔒</option><option>Gegner 🔒</option></select></div>',"analysis");
+}
+function showDevelopment(){
+  shell("Entwicklung",'<div class="card"><h2>Muster & Trends</h2><p><b>ab 2 Datenmengen:</b> Trendanzeige möglich</p><p><b>ab 3 Datenmengen:</b> Mustererkennung</p><p><b>ab 4 Datenmengen:</b> belastbarer Trend</p><div class="grid"><button>Siege</button><button>Niederlagen</button><button>Turnier</button><button>Punktspiel</button></div></div>',"development");
+}
+function showOpponents(){
+  shell("Gegner",'<div class="card"><h2>Gegneranalyse</h2><p class="muted">Premium-Modul. Die separate Gegner-Erfassungsmaske folgt im Analyseausbau.</p></div>',"opponents");
+}
+
+if(activePlayer())showHome();else showSettings();
+</script>
+</body>
+</html>
